@@ -403,8 +403,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-sysperms", _("Create new files with system default permissions, instead of umask 077 (only effective with disabled wallet functionality)"));
 #endif
     strUsage += HelpMessageOpt("-txindex", strprintf(_("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)"), DEFAULT_TXINDEX));
-    strUsage += HelpMessageOpt("-forcestart", _("Attempt to force blockchain corruption recovery") + " " + _("on startup"));
-
+    
     strUsage += HelpMessageGroup(_("Connection options:"));
     strUsage += HelpMessageOpt("-addnode=<ip>", _("Add a node to connect to and attempt to keep the connection open"));
     strUsage += HelpMessageOpt("-banscore=<n>", strprintf(_("Threshold for disconnecting misbehaving peers (default: %u)"), DEFAULT_BANSCORE_THRESHOLD));
@@ -1490,31 +1489,36 @@ bool AppInit2()
                     break;
                 }
 
-                {
-                    LOCK(cs_main);
-                    nMoneySupply = 0;
+                if (chainActive.Tip() != nullptr) {
+                    if (!chainActive.Tip()->nMoneySupply) {
+                        LOCK(cs_main);
+                        nMoneySupply = 0;
 
-                    std::unique_ptr<CCoinsViewCursor> pcursor(pcoinsTip->Cursor());
+                        std::unique_ptr<CCoinsViewCursor> pcursor(pcoinsTip->Cursor());
 
-                    while (pcursor->Valid()) {
-                        boost::this_thread::interruption_point();
-                        COutPoint key;
-                        Coin coin;
-                        if (pcursor->GetKey(key) && pcursor->GetValue(coin)) {
-                            // ----------- burn address scanning -----------
-                            CTxDestination source;
-                            if (ExtractDestination(coin.out.scriptPubKey, source)) {
-                                const std::string addr = EncodeDestination(source);
-                                if (consensus.mBurnAddresses.find(addr) != consensus.mBurnAddresses.end() &&
-                                    consensus.mBurnAddresses.at(addr) < chainActive.Height())
-                                {
-                                    pcursor->Next();
-                                    continue;
+                        while (pcursor->Valid()) {
+                            boost::this_thread::interruption_point();
+                            COutPoint key;
+                            Coin coin;
+                            if (pcursor->GetKey(key) && pcursor->GetValue(coin)) {
+                                // ----------- burn address scanning -----------
+                                CTxDestination source;
+                                if (ExtractDestination(coin.out.scriptPubKey, source)) {
+                                    const std::string addr = EncodeDestination(source);
+                                    if (consensus.mBurnAddresses.find(addr) != consensus.mBurnAddresses.end() &&
+                                        consensus.mBurnAddresses.at(addr) < chainActive.Height()) {
+                                        pcursor->Next();
+                                        continue;
+                                    }
                                 }
+                                nMoneySupply += coin.out.nValue;
                             }
-                            nMoneySupply += coin.out.nValue;
+                            pcursor->Next();
                         }
-                        pcursor->Next();
+
+                        chainActive.Tip()->nMoneySupply = nMoneySupply;
+                    } else {
+                        nMoneySupply = chainActive.Tip()->nMoneySupply.get();
                     }
                 }
 
